@@ -20,9 +20,9 @@ class HintItem(enum.Enum):
     @property
     def char(self):
         return {
-                HintItem.GREEN: 'G',
-                HintItem.YELLOW: 'Y',
-                HintItem.BLACK: 'B',
+            HintItem.GREEN: "G",
+            HintItem.YELLOW: "Y",
+            HintItem.BLACK: "B",
         }[self]
 
 
@@ -147,11 +147,11 @@ def _next_possible_hints(state: State) -> t.Iterator[Hint]:
 
 def _format(state: State) -> str:
     def _format_hint(hint: Hint) -> str:
-        return ''.join(h.char for h in hint)
+        return "".join(h.char for h in hint)
 
-    s = ''
+    s = ""
     for word, hint in zip(state.words, state.hints):
-        s += word + '\t' + _format_hint(hint) + '\n'
+        s += word + "\t" + _format_hint(hint) + "\n"
     return s
 
 
