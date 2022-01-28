@@ -12,9 +12,9 @@ class Player(enum.Enum):
 
     def __str__(self):
         if self == Player.HUMAN:
-            return 'human'
+            return "human"
         elif self == Player.ABSURDLE:
-            return 'absurdle'
+            return "absurdle"
 
 
 class HintItem(enum.Enum):
@@ -46,6 +46,8 @@ class State:
     player: Player
     words: t.List[Word]
     hints: t.List[Hint]
+
+    # _possible_words: t.List[Word]
 
     @property
     def is_terminal_node(self):
@@ -84,11 +86,14 @@ def _matches(potential_word: Word, guessed_word: Word, hint: Hint) -> bool:
     return True
 
 
-
 @functools.cache
 def _narrow_wlist(hashable_hint: HashableHint, word: str) -> t.Set[Word]:
     """ seems to work. Dramatically reduces word list (2000 -> 500). Not good enough """
-    return set(output_word for output_word in WORD_LIST if _matches(output_word, word, list(hashable_hint)))
+    return set(
+        output_word
+        for output_word in WORD_LIST
+        if _matches(output_word, word, list(hashable_hint))
+    )
 
 
 def _next_possible_words(state: State) -> t.Iterator[Word]:
@@ -171,7 +176,13 @@ def _format(state: State) -> str:
 
     s = ""
     for (i, (word, hint)) in enumerate(zip(state.words, state.hints)):
-        s += word + "\t" + _format_hint(hint) + (f'\t{state.player}' if i == 0 else '') + "\n"
+        s += (
+            word
+            + "\t"
+            + _format_hint(hint)
+            + (f"\t{state.player}" if i == 0 else "")
+            + "\n"
+        )
 
     if len(state.words) > len(state.hints):
         s += state.words[-1] + "\n"
