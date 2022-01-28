@@ -1,15 +1,20 @@
-import collections
 from dataclasses import dataclass
+import collections
 import enum
-import typing as t
-
-# import functools
+import functools
 import itertools
+import typing as t
 
 
 class Player(enum.Enum):
     HUMAN = enum.auto()
     ABSURDLE = enum.auto()
+
+    def __str__(self):
+        if self == Player.HUMAN:
+            return 'human'
+        elif self == Player.ABSURDLE:
+            return 'absurdle'
 
 
 class HintItem(enum.Enum):
@@ -29,6 +34,7 @@ class HintItem(enum.Enum):
 Word = str
 
 Hint = t.List[HintItem]
+HashableHint = t.Tuple[HintItem]
 
 
 @dataclass
@@ -78,15 +84,29 @@ def _matches(potential_word: Word, guessed_word: Word, hint: Hint) -> bool:
     return True
 
 
+
+@functools.cache
+def _narrow_wlist(hashable_hint: HashableHint, word: str) -> t.Set[Word]:
+    """ seems to work. Dramatically reduces word list (2000 -> 500). Not good enough """
+    return set(output_word for output_word in WORD_LIST if _matches(output_word, word, list(hashable_hint)))
+
+
 def _next_possible_words(state: State) -> t.Iterator[Word]:
     """
-    actions that PLAYER can take
+    actions that HUMAN can take
     given state what are all the possible words that could fit the hints
     """
     assert state.player == Player.HUMAN
     assert len(state.words) == len(state.hints)
 
-    for potential_word in WORD_LIST:
+    reduced_word_list = functools.reduce(
+        lambda a, b: a & b,
+        (
+            _narrow_wlist(tuple(hint), word)
+            for (word, hint) in zip(state.words, state.hints)
+        ),
+    )
+    for potential_word in reduced_word_list:
         if all(
             _matches(potential_word, guessed_word, hint)
             for guessed_word, hint in zip(state.words, state.hints)
@@ -150,8 +170,12 @@ def _format(state: State) -> str:
         return "".join(h.char for h in hint)
 
     s = ""
-    for word, hint in zip(state.words, state.hints):
-        s += word + "\t" + _format_hint(hint) + "\n"
+    for (i, (word, hint)) in enumerate(zip(state.words, state.hints)):
+        s += word + "\t" + _format_hint(hint) + (f'\t{state.player}' if i == 0 else '') + "\n"
+
+    if len(state.words) > len(state.hints):
+        s += state.words[-1] + "\n"
+
     return s
 
 
@@ -164,7 +188,7 @@ def _debug(f):
         global _call_stack
         _call_stack += 1
         nodes_visited[_call_stack] += 1
-        if _call_stack == 2:
+        if _call_stack == 1:
             print(nodes_visited[_call_stack])
             print(_format(state))
         retval = f(state)
@@ -195,7 +219,7 @@ def minimax(state: State) -> t.List[State]:
             State(Player.ABSURDLE, state.words + [word], state.hints)
             for word in _next_possible_words(state)
         ]
-        return min(
+        result = min(
             (minimax(next_state) for next_state in next_possible_states),
             key=len,
         )
@@ -205,7 +229,7 @@ def minimax(state: State) -> t.List[State]:
             State(Player.HUMAN, state.words, state.hints + [hint])
             for hint in _next_possible_hints(state)
         )
-        return max(
+        result = max(
             (minimax(next_state) for next_state in next_possible_states),
             key=len,
         )
@@ -213,6 +237,9 @@ def minimax(state: State) -> t.List[State]:
         raise Exception(
             "Non exhaustive enum (player should be HUMAN or ABSURDLE)"
         )
+
+    print(len(result))
+    return result
 
 
 # print(minimax
