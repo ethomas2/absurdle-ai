@@ -251,7 +251,7 @@ def minimax(state: State) -> t.List[State]:
             "Non exhaustive enum (player should be HUMAN or ABSURDLE)"
         )
 
-    print(len(result))
+    print(f"best result cs={_call_stack}", len(result))
     return result
 
 
