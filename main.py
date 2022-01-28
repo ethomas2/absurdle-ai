@@ -223,6 +223,7 @@ def minimax(state: State) -> t.List[State]:
             (minimax(next_state) for next_state in next_possible_states),
             key=len,
         )
+        result = [state] + result
 
     elif state.player == Player.ABSURDLE:
         next_possible_states = (
@@ -233,6 +234,7 @@ def minimax(state: State) -> t.List[State]:
             (minimax(next_state) for next_state in next_possible_states),
             key=len,
         )
+        result = [state] + result
     else:
         raise Exception(
             "Non exhaustive enum (player should be HUMAN or ABSURDLE)"
