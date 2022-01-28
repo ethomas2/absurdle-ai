@@ -1,6 +1,8 @@
+import collections
 from dataclasses import dataclass
 import enum
 import typing as t
+
 # import functools
 import itertools
 
@@ -14,6 +16,14 @@ class HintItem(enum.Enum):
     GREEN = enum.auto()
     YELLOW = enum.auto()
     BLACK = enum.auto()
+
+    @property
+    def char(self):
+        return {
+                HintItem.GREEN: 'G',
+                HintItem.YELLOW: 'Y',
+                HintItem.BLACK: 'B',
+        }[self]
 
 
 Word = str
@@ -116,14 +126,55 @@ def _next_possible_hints(state: State) -> t.Iterator[Hint]:
         return all(_matches(true_word, w, h) for (w, h) in zip(words, hints))
 
     for hint in map(list, itertools.product(HintItem, repeat=WORD_LENGTH)):
+
+        if len(state.hints) > 0 and any(
+            state.hints[-1][i] == HintItem.GREEN and hint[i] != HintItem.GREEN
+            for i in range(WORD_LENGTH)
+        ):
+            # optimization: we know hint has to keep all the greens in place,
+            # so discard any that don't
+            continue
+
         exists = any(
-            _is_consistent_history(true_word, state.words, state.hints + [hint])
+            _is_consistent_history(
+                true_word, state.words, state.hints + [hint]
+            )
             for true_word in WORD_LIST
         )
         if exists:
             yield hint
 
 
+def _format(state: State) -> str:
+    def _format_hint(hint: Hint) -> str:
+        return ''.join(h.char for h in hint)
+
+    s = ''
+    for word, hint in zip(state.words, state.hints):
+        s += word + '\t' + _format_hint(hint) + '\n'
+    return s
+
+
+_call_stack = -1
+nodes_visited = collections.defaultdict(int)
+
+
+def _debug(f):
+    def g(state):
+        global _call_stack
+        _call_stack += 1
+        nodes_visited[_call_stack] += 1
+        if _call_stack == 2:
+            print(nodes_visited[_call_stack])
+            print(_format(state))
+        retval = f(state)
+        _call_stack -= 1
+        return retval
+
+    return g
+
+
+@_debug
 def minimax(state: State) -> t.List[State]:
     """
     minimax(state, player)
