@@ -17,6 +17,10 @@ class Player(enum.Enum):
             return "absurdle"
 
 
+class InvalidHintItem(Exception):
+    pass
+
+
 class HintItem(enum.Enum):
     GREEN = enum.auto()
     YELLOW = enum.auto()
@@ -32,11 +36,14 @@ class HintItem(enum.Enum):
 
     @classmethod
     def from_char(cls, ch) -> "HintItem":
-        return {
+        result = {
             "G": HintItem.GREEN,
             "Y": HintItem.YELLOW,
             "B": HintItem.BLACK,
-        }[ch.upper()]
+        }.get(ch.upper())
+        if result is None:
+            raise InvalidHintItem(ch)
+        return result
 
 
 Word = str
@@ -48,7 +55,7 @@ HashableHint = t.Tuple[HintItem]
 def _narrow_word_universe(
     universe: t.List[Word], words: t.List[Word], hints: t.List[Hint]
 ) -> t.List[Word]:
-    assert len(words) == len(hints), f'{len(words)=} {len(hints)=}'
+    assert len(words) == len(hints), f"{len(words)=} {len(hints)=}"
     return [
         word
         for word in universe
@@ -66,25 +73,32 @@ class State:
     words: t.List[Word]
     hints: t.List[Hint]
 
-    _word_universe: t.List[Word]
+    _precomputed_word_universe: t.Optional[t.List[Word]] = None
 
     def __post_init__(self):
         self._assert_valid_word_universe()
 
     def _assert_valid_word_universe(self):
+        if self._precomputed_word_universe is None:
+            return
         words, hints = self.words, self.hints
         assert len(words) in [len(hints), len(hints) + 1]
         if len(words) > len(hints):
-            words = words[:len(hints) ]
+            words = words[: len(hints)]
         assert (
             _narrow_word_universe(WORD_LIST, words, hints)
-            == self._word_universe
+            == self._precomputed_word_universe
         )
 
     @functools.cached_property
     # TODO: return the reduced set of words
-    def possible_words(self) -> t.List[Word]:
-        return self._word_universe
+    def word_universe(self) -> t.List[Word]:
+        if self._precomputed_word_universe is not None:
+            return self._precomputed_word_universe
+        limit = min(len(self.words), len(self.hints))
+        return _narrow_word_universe(
+            WORD_LIST, self.words[:limit], self.hints[:limit]
+        )
 
     @property
     def is_terminal_node(self):
@@ -149,7 +163,7 @@ def _next_possible_words(state: State) -> t.List[Word]:
     #     ),
     # )
     potential_words = []
-    for potential_word in state.possible_words:
+    for potential_word in state.word_universe:
         if all(
             _matches(potential_word, guessed_word, hint)
             for guessed_word, hint in zip(state.words, state.hints)
@@ -199,7 +213,7 @@ def _next_possible_hints(state: State) -> t.Iterator[Hint]:
 
         exists = any(
             _matches(word, state.words[-1], hint)
-            for word in state.possible_words
+            for word in state.word_universe
         )
         if exists:
             yield hint
@@ -266,7 +280,7 @@ def minimax(state: State) -> t.List[State]:
                 Player.ABSURDLE,
                 state.words + [word],
                 state.hints,
-                state._word_universe,
+                state.word_universe,
             )
             for word in _next_possible_words(state)
         ]
@@ -277,26 +291,25 @@ def minimax(state: State) -> t.List[State]:
         result = [state] + result
 
     elif state.player == Player.ABSURDLE:
-        next_possible_states = (
+        next_possible_states = [
             State(
                 Player.HUMAN,
                 state.words,
                 state.hints + [hint],
                 _narrow_word_universe(
-                    state._word_universe, [state.words[-1]], [hint]
+                    state.word_universe, [state.words[-1]], [hint]
                 ),
             )
             for hint in _next_possible_hints(state)
-        )
+        ]
         result = max(
             (minimax(next_state) for next_state in next_possible_states),
             key=lambda lst: list(lst[-1].words),
         )
         result = [state] + result
     else:
-        raise Exception(
-            "Non exhaustive enum (player should be HUMAN or ABSURDLE)"
-        )
+        raise Exception("Non exhaustive enum (player should be HUMAN or ABSURDLE)")
+
 
     # print(f"best result cs={_call_stack}", len(result))
     return result
@@ -317,7 +330,7 @@ def test2():
         ("wreck", list(map(HintItem.from_char, "GGGGG"))),
     ]
 
-    level = 4
+    level = 2
     words, hints = zip(*arr[:level])
     words, hints = list(words), list(hints)
     hints = hints[:-1]
@@ -327,12 +340,70 @@ def test2():
         Player.ABSURDLE,
         words,
         hints,
-        _narrow_word_universe(
-            WORD_LIST, words[:-1], hints
-        ),
+        _narrow_word_universe(WORD_LIST, words[:-1], hints),
     )
-    # import pdb; pdb.set_trace()  # noqa: E702
-    minimax(start_state)
+    state_list = minimax(start_state)
+    print(_format(state_list[-1]))
+
+
+def _get_human_input() -> Word:
+    while True:
+        inp = input(">>> ENTER WORD ::").strip()
+        if len(inp) != WORD_LENGTH:
+            print("Invalid word")
+            continue
+        return inp
+
+
+def _get_absurdle_input() -> Hint:
+    while True:
+        inp = input(">>> ENTER HINT ::").strip()
+        if len(inp) != WORD_LENGTH:
+            print("Invalid hint")
+            continue
+        try:
+            return [HintItem.from_char(ch) for ch in inp]
+        except InvalidHintItem:
+            print("Invalid hint")
+            continue
+
+def interact(start_word):
+    state = State(
+        Player.ABSURDLE,
+        [start_word],
+        [],
+        WORD_LIST,
+    )
+    while not state.is_terminal_node:
+        print("CURRENT STATE")
+        print(_format(state))
+        suggested_next_state = minimax(state)[1]
+        suggestion = (
+            suggested_next_state.words[-1]
+            if state.player == Player.HUMAN
+            else "".join(h.char for h in suggested_next_state.hints[-1])
+        )
+        print("SUGGESTION ::", suggestion)
+
+        if state.player == Player.HUMAN:
+            inp = _get_human_input()
+            next_state = State(
+                Player.ABSURDLE,
+                state.words + [inp],
+                state.hints,
+            )
+        elif state.player == Player.ABSURDLE:
+            inp = _get_absurdle_input()
+            next_state = State(
+                Player.HUMAN,
+                state.words,
+                state.hints + [inp],
+            )
+        else:
+            raise Exception("Non exhaustive enum (player should be HUMAN or ABSURDLE)")
+
+        state = next_state
+
 
 
 if __name__ == "__main__":
@@ -347,4 +418,5 @@ if __name__ == "__main__":
     ...
     >>> FIN
     """
-    test2()
+    interact('later')
+    # test2()
