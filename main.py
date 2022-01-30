@@ -30,11 +30,30 @@ class HintItem(enum.Enum):
             HintItem.BLACK: "B",
         }[self]
 
+    @classmethod
+    def from_char(cls, ch) -> "HintItem":
+        return {
+            "G": HintItem.GREEN,
+            "Y": HintItem.YELLOW,
+            "B": HintItem.BLACK,
+        }[ch.upper()]
+
 
 Word = str
 
 Hint = t.List[HintItem]
 HashableHint = t.Tuple[HintItem]
+
+
+def _narrow_word_universe(
+    universe: t.List[Word], words: t.List[Word], hints: t.List[Hint]
+) -> t.List[Word]:
+    assert len(words) == len(hints), f'{len(words)=} {len(hints)=}'
+    return [
+        word
+        for word in universe
+        if all(_matches(word, w, h) for (w, h) in zip(words, hints))
+    ]
 
 
 @dataclass
@@ -47,7 +66,25 @@ class State:
     words: t.List[Word]
     hints: t.List[Hint]
 
-    # _possible_words: t.List[Word]
+    _word_universe: t.List[Word]
+
+    def __post_init__(self):
+        self._assert_valid_word_universe()
+
+    def _assert_valid_word_universe(self):
+        words, hints = self.words, self.hints
+        assert len(words) in [len(hints), len(hints) + 1]
+        if len(words) > len(hints):
+            words = words[:len(hints) ]
+        assert (
+            _narrow_word_universe(WORD_LIST, words, hints)
+            == self._word_universe
+        )
+
+    @functools.cached_property
+    # TODO: return the reduced set of words
+    def possible_words(self) -> t.List[Word]:
+        return self._word_universe
 
     @property
     def is_terminal_node(self):
@@ -66,7 +103,7 @@ def _get_word_list() -> t.List[Word]:
     return words
 
 
-WORD_LIST = _get_word_list()
+WORD_LIST: t.List[Word] = _get_word_list()
 
 
 def _matches(potential_word: Word, guessed_word: Word, hint: Hint) -> bool:
@@ -86,17 +123,17 @@ def _matches(potential_word: Word, guessed_word: Word, hint: Hint) -> bool:
     return True
 
 
-@functools.cache
-def _narrow_wlist(hashable_hint: HashableHint, word: str) -> t.Set[Word]:
-    """ seems to work. Dramatically reduces word list (2000 -> 500). Not good enough """
-    return set(
-        output_word
-        for output_word in WORD_LIST
-        if _matches(output_word, word, list(hashable_hint))
-    )
+# @functools.cache
+# def _narrow_wlist(hashable_hint: HashableHint, word: str) -> t.Set[Word]:
+#     """ seems to work. Dramatically reduces word list (2000 -> 500). Not good enough """
+#     return [
+#         output_word
+#         for output_word in WORD_LIST
+#         if _matches(output_word, word, list(hashable_hint))
+#     ]
 
 
-def _next_possible_words(state: State) -> t.Iterator[Word]:
+def _next_possible_words(state: State) -> t.List[Word]:
     """
     actions that HUMAN can take
     given state what are all the possible words that could fit the hints
@@ -104,24 +141,24 @@ def _next_possible_words(state: State) -> t.Iterator[Word]:
     assert state.player == Player.HUMAN
     assert len(state.words) == len(state.hints)
 
-    reduced_word_list = functools.reduce(
-        lambda a, b: a & b,
-        (
-            _narrow_wlist(tuple(hint), word)
-            for (word, hint) in zip(state.words, state.hints)
-        ),
-    )
-    for potential_word in reduced_word_list:
+    # reduced_word_list = functools.reduce(
+    #     lambda a, b: a & b,
+    #     (
+    #         _narrow_wlist(tuple(hint), word)
+    #         for (word, hint) in zip(state.words, state.hints)
+    #     ),
+    # )
+    potential_words = []
+    for potential_word in state.possible_words:
         if all(
             _matches(potential_word, guessed_word, hint)
             for guessed_word, hint in zip(state.words, state.hints)
         ):
-            yield potential_word
+            potential_words.append(potential_word)
+    return potential_words
 
 
 def _next_possible_hints(state: State) -> t.Iterator[Hint]:
-    # return list(map(list, itertools.product(HintItem, repeat=WORD_LENGTH)))
-
     """
     It's absurdle's turn
     - make a hint possibility
@@ -144,27 +181,25 @@ def _next_possible_hints(state: State) -> t.Iterator[Hint]:
     assert state.player == Player.ABSURDLE
     assert len(state.words) == len(state.hints) + 1
 
-    def _is_consistent_history(
-        true_word: Word, words: t.List[Word], hints: t.List[Hint]
-    ):
-        assert len(words) == len(hints)
-        return all(_matches(true_word, w, h) for (w, h) in zip(words, hints))
+    # def _is_consistent_history(
+    #     true_word: Word, words: t.List[Word], hints: t.List[Hint]
+    # ):
+    #     assert len(words) == len(hints)
+    #     return all(_matches(true_word, w, h) for (w, h) in zip(words, hints))
 
     for hint in map(list, itertools.product(HintItem, repeat=WORD_LENGTH)):
 
-        if len(state.hints) > 0 and any(
-            state.hints[-1][i] == HintItem.GREEN and hint[i] != HintItem.GREEN
-            for i in range(WORD_LENGTH)
-        ):
-            # optimization: we know hint has to keep all the greens in place,
-            # so discard any that don't
-            continue
+        # if len(state.hints) > 0 and any(
+        #     state.hints[-1][i] == HintItem.GREEN and hint[i] != HintItem.GREEN
+        #     for i in range(WORD_LENGTH)
+        # ):
+        #     # optimization: we know hint has to keep all the greens in place,
+        #     # so discard any that don't
+        #     continue
 
         exists = any(
-            _is_consistent_history(
-                true_word, state.words, state.hints + [hint]
-            )
-            for true_word in WORD_LIST
+            _matches(word, state.words[-1], hint)
+            for word in state.possible_words
         )
         if exists:
             yield hint
@@ -227,23 +262,35 @@ def minimax(state: State) -> t.List[State]:
         return [state]
     elif state.player == Player.HUMAN:
         next_possible_states = [  # TODO: test out if this is faster with list or generator comprehension
-            State(Player.ABSURDLE, state.words + [word], state.hints)
+            State(
+                Player.ABSURDLE,
+                state.words + [word],
+                state.hints,
+                state._word_universe,
+            )
             for word in _next_possible_words(state)
         ]
         result = min(
             (minimax(next_state) for next_state in next_possible_states),
-            key=len,
+            key=lambda lst: list(lst[-1].words),
         )
         result = [state] + result
 
     elif state.player == Player.ABSURDLE:
         next_possible_states = (
-            State(Player.HUMAN, state.words, state.hints + [hint])
+            State(
+                Player.HUMAN,
+                state.words,
+                state.hints + [hint],
+                _narrow_word_universe(
+                    state._word_universe, [state.words[-1]], [hint]
+                ),
+            )
             for hint in _next_possible_hints(state)
         )
         result = max(
             (minimax(next_state) for next_state in next_possible_states),
-            key=len,
+            key=lambda lst: list(lst[-1].words),
         )
         result = [state] + result
     else:
@@ -251,11 +298,42 @@ def minimax(state: State) -> t.List[State]:
             "Non exhaustive enum (player should be HUMAN or ABSURDLE)"
         )
 
-    print(f"best result cs={_call_stack}", len(result))
+    # print(f"best result cs={_call_stack}", len(result))
     return result
 
 
-# print(minimax
+def test1():
+    start_state = State(Player.ABSURDLE, ["adieu"], [], WORD_LIST)
+    print(minimax(start_state))
+
+
+def test2():
+
+    arr = [
+        ("today", list(map(HintItem.from_char, "BBBBB"))),
+        ("resin", list(map(HintItem.from_char, "YYBBB"))),
+        ("huger", list(map(HintItem.from_char, "BBBYY"))),
+        ("creme", list(map(HintItem.from_char, "YGGBB"))),
+        ("wreck", list(map(HintItem.from_char, "GGGGG"))),
+    ]
+
+    level = 4
+    words, hints = zip(*arr[:level])
+    words, hints = list(words), list(hints)
+    hints = hints[:-1]
+
+    assert len(words) in [len(hints), len(hints) + 1]
+    start_state = State(
+        Player.ABSURDLE,
+        words,
+        hints,
+        _narrow_word_universe(
+            WORD_LIST, words[:-1], hints
+        ),
+    )
+    # import pdb; pdb.set_trace()  # noqa: E702
+    minimax(start_state)
+
 
 if __name__ == "__main__":
     """
@@ -269,6 +347,4 @@ if __name__ == "__main__":
     ...
     >>> FIN
     """
-
-    start_state = State(Player.ABSURDLE, ["adieu"], [])
-    print(minimax(start_state))
+    test2()
