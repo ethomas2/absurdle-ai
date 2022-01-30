@@ -4,6 +4,15 @@ import enum
 import functools
 import itertools
 import typing as t
+import os
+
+
+DEBUG = os.environ.get("DEBUG") is not None and os.environ["DEBUG"].lower() in [
+    "yes",
+    "true",
+    "1",
+    "y",
+]
 
 
 class Player(enum.Enum):
@@ -65,14 +74,13 @@ def _narrow_word_universe(
 
 @dataclass
 class State:
-    # TODO: validate pydantic if errors
-    # - all words are from word list
-    # - if player  == human -> len(words) == len(hints)
-    # - if player == absurdle -> len(words) == len(hints) + 1
     player: Player
     words: t.List[Word]
     hints: t.List[Hint]
 
+    # creator of State has the option to pass in the precomputed word universe
+    # if it is cheaper for the caller to compute it than it would be for this
+    # instance of State to compute by scratch. If -O is not passed
     _precomputed_word_universe: t.Optional[t.List[Word]] = None
 
     def __post_init__(self):
@@ -82,16 +90,18 @@ class State:
         if self._precomputed_word_universe is None:
             return
         words, hints = self.words, self.hints
-        assert len(words) in [len(hints), len(hints) + 1]
-        if len(words) > len(hints):
-            words = words[: len(hints)]
         assert (
-            _narrow_word_universe(WORD_LIST, words, hints)
+            len(words) == len(hints)
+            if self.player == Player.HUMAN
+            else len(words) == len(hints) + 1
+        ), f"{len(words)=} {len(hints)=}"
+        limit = min(len(words), len(hints))
+        assert (
+            _narrow_word_universe(WORD_LIST, words[:limit], hints[:limit])
             == self._precomputed_word_universe
         )
 
     @functools.cached_property
-    # TODO: return the reduced set of words
     def word_universe(self) -> t.List[Word]:
         if self._precomputed_word_universe is not None:
             return self._precomputed_word_universe
@@ -255,7 +265,7 @@ def _debug(f):
         _call_stack -= 1
         return retval
 
-    return g
+    return g if DEBUG else f
 
 
 @_debug
@@ -308,8 +318,9 @@ def minimax(state: State) -> t.List[State]:
         )
         result = [state] + result
     else:
-        raise Exception("Non exhaustive enum (player should be HUMAN or ABSURDLE)")
-
+        raise Exception(
+            "Non exhaustive enum (player should be HUMAN or ABSURDLE)"
+        )
 
     # print(f"best result cs={_call_stack}", len(result))
     return result
@@ -348,31 +359,31 @@ def test2():
 
 def _get_human_input() -> Word:
     while True:
-        inp = input(">>> ENTER WORD ::").strip()
+        inp = input(">>> ENTER WORD :: ").strip()
         if len(inp) != WORD_LENGTH:
             print("Invalid word")
             continue
-        return inp
+        return inp.lower()
 
 
 def _get_absurdle_input() -> Hint:
     while True:
-        inp = input(">>> ENTER HINT ::").strip()
+        inp = input(">>> ENTER HINT :: ").strip()
         if len(inp) != WORD_LENGTH:
             print("Invalid hint")
             continue
         try:
-            return [HintItem.from_char(ch) for ch in inp]
+            return [HintItem.from_char(ch.lower()) for ch in inp]
         except InvalidHintItem:
             print("Invalid hint")
             continue
 
-def interact(start_word):
+
+def interact(player: Player, words: t.List[Word], hints: t.List[Hint]):
     state = State(
-        Player.ABSURDLE,
-        [start_word],
-        [],
-        WORD_LIST,
+        player,
+        words,
+        hints,
     )
     while not state.is_terminal_node:
         print("CURRENT STATE")
@@ -400,10 +411,11 @@ def interact(start_word):
                 state.hints + [inp],
             )
         else:
-            raise Exception("Non exhaustive enum (player should be HUMAN or ABSURDLE)")
+            raise Exception(
+                "Non exhaustive enum (player should be HUMAN or ABSURDLE)"
+            )
 
         state = next_state
-
 
 
 if __name__ == "__main__":
@@ -418,5 +430,12 @@ if __name__ == "__main__":
     ...
     >>> FIN
     """
-    interact('later')
+    interact(
+        Player.HUMAN,
+        ["later"],
+        [
+            list(map(HintItem.from_char, hint_str))
+            for hint_str in ["bbbyg"]
+        ],
+    )
     # test2()
