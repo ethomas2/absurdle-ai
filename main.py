@@ -7,7 +7,9 @@ import typing as t
 import os
 
 
-DEBUG = os.environ.get("DEBUG") is not None and os.environ["DEBUG"].lower() in [
+DEBUG = os.environ.get("DEBUG") is not None and os.environ[
+    "DEBUG"
+].lower() in [
     "yes",
     "true",
     "1",
@@ -130,20 +132,29 @@ def _get_word_list() -> t.List[Word]:
 WORD_LIST: t.List[Word] = _get_word_list()
 
 
-def _matches(potential_word: Word, guessed_word: Word, hint: Hint) -> bool:
+def _matches(test_word: Word, hint_word: Word, hint: Hint) -> bool:
     """
-    Returns if the word <potential_word> is possible given the hint
-    (guessed_word, hint) was already given
+    Returns if the word <test_word> is possible given the hint
+    (hint_word, hint) was already given
     """
-    for (i, (ch, hint_item)) in enumerate(zip(guessed_word, hint)):
-        if hint_item == HintItem.GREEN and potential_word[i] != ch:
+    non_green_letters = [
+        c for (c, h) in zip(test_word, hint) if h != HintItem.GREEN
+    ]
+    for (i, (ch, hint_item)) in enumerate(zip(hint_word, hint)):
+        if hint_item == HintItem.GREEN and test_word[i] != ch:
+            # print('green')
             return False
-        elif hint_item == HintItem.BLACK and ch in potential_word:
-            return False
-        elif hint_item == HintItem.YELLOW and (
-            potential_word[i] == ch or ch not in potential_word
-        ):
-            return False
+        elif hint_item == HintItem.BLACK:
+            if ch in non_green_letters:
+                return False
+        elif hint_item == HintItem.YELLOW:
+            # this char must appear in the non green occurances of potword and
+            # must not appear in this same index again in potword
+            if test_word[i] == ch:
+                return False
+            if ch not in non_green_letters:
+                return False
+
     return True
 
 
@@ -205,22 +216,9 @@ def _next_possible_hints(state: State) -> t.Iterator[Hint]:
     assert state.player == Player.ABSURDLE
     assert len(state.words) == len(state.hints) + 1
 
-    # def _is_consistent_history(
-    #     true_word: Word, words: t.List[Word], hints: t.List[Hint]
-    # ):
-    #     assert len(words) == len(hints)
-    #     return all(_matches(true_word, w, h) for (w, h) in zip(words, hints))
-
-    for hint in map(list, itertools.product(HintItem, repeat=WORD_LENGTH)):
-
-        # if len(state.hints) > 0 and any(
-        #     state.hints[-1][i] == HintItem.GREEN and hint[i] != HintItem.GREEN
-        #     for i in range(WORD_LENGTH)
-        # ):
-        #     # optimization: we know hint has to keep all the greens in place,
-        #     # so discard any that don't
-        #     continue
-
+    for hint in map(
+        list, itertools.product(reversed(HintItem), repeat=WORD_LENGTH)
+    ):
         exists = any(
             _matches(word, state.words[-1], hint)
             for word in state.word_universe
@@ -229,6 +227,7 @@ def _next_possible_hints(state: State) -> t.Iterator[Hint]:
             yield hint
 
 
+# TODO: rename to _format_state
 def _format(state: State) -> str:
     def _format_hint(hint: Hint) -> str:
         return "".join(h.char for h in hint)
@@ -254,14 +253,14 @@ nodes_visited = collections.defaultdict(int)
 
 
 def _debug(f):
-    def g(state):
+    def g(state, *args, **kwargs):
         global _call_stack
         _call_stack += 1
         nodes_visited[_call_stack] += 1
         if _call_stack == 1:
             print(nodes_visited[_call_stack])
             print(_format(state))
-        retval = f(state)
+        retval = f(state, *args, **kwargs)
         _call_stack -= 1
         return retval
 
@@ -269,7 +268,7 @@ def _debug(f):
 
 
 @_debug
-def minimax(state: State) -> t.List[State]:
+def minimax(state: State, alpha=None, beta=None) -> t.List[State]:
     """
     minimax(state, player)
 
@@ -282,10 +281,16 @@ def minimax(state: State) -> t.List[State]:
     returns sequence of states to be taken froom this state under optimal play
     """
 
-    if state.is_terminal_node:
+    alpha = alpha or float("-inf")  # best option the maximizing player has
+    beta = beta or float("+inf")  # best option the minimimizing player has
+
+    if (
+        state.is_terminal_node
+    ):  # TODO:remove. Degenerate case of next_possible_states
         return [state]
-    elif state.player == Player.HUMAN:
-        next_possible_states = [  # TODO: test out if this is faster with list or generator comprehension
+    elif state.player == Player.HUMAN:  # minimizing player
+
+        next_possible_states = (
             State(
                 Player.ABSURDLE,
                 state.words + [word],
@@ -293,15 +298,30 @@ def minimax(state: State) -> t.List[State]:
                 state.word_universe,
             )
             for word in _next_possible_words(state)
-        ]
-        result = min(
-            (minimax(next_state) for next_state in next_possible_states),
-            key=lambda lst: list(lst[-1].words),
-        )
-        result = [state] + result
+        )  # TODO: refactor this into general _next_states(s)
+
+        best_val, best_path = float("+inf"), []
+        for next_state in next_possible_states:
+            path = minimax(next_state, alpha, beta)
+            val = len(path[-1].words)
+            beta = min(beta, val)
+            if beta <= alpha :
+                # maximizing player wouldn't have picked this node. This is *not*
+                # the proper value of this node but return it anyway cause it's not
+                # gonna get picked anyway
+                return [state] + path
+
+            if val < best_val:
+                best_val = val
+                best_path = path
+        # If we get here and best_path = [] it means we got a terminal node.
+        # Shouldn't be possible if state.is_terminal_node was correct
+        assert best_path != []
+        result = [state] + best_path
 
     elif state.player == Player.ABSURDLE:
-        next_possible_states = [
+        # maximizing player
+        next_possible_states = (
             State(
                 Player.HUMAN,
                 state.words,
@@ -311,18 +331,35 @@ def minimax(state: State) -> t.List[State]:
                 ),
             )
             for hint in _next_possible_hints(state)
-        ]
-        result = max(
-            (minimax(next_state) for next_state in next_possible_states),
-            key=lambda lst: list(lst[-1].words),
         )
-        result = [state] + result
+
+        best_val, best_path = float("-inf"), []
+        for next_state in next_possible_states:
+            path = minimax(next_state, alpha, beta)
+            val = len(path[-1].words)
+            alpha = max(alpha, val)
+            if alpha >= beta:
+                # if state.words[-1]== 'dodgy':
+                #     import pdb; pdb.set_trace()  # noqa: E702
+                # minimizing player wouldn't have picked this node. This is *not*
+                # the optimal path from this node but return it anyway cause it's not
+                # gonna get picked anyway
+                return [state] + path
+
+            if val > best_val:
+                best_val = val
+                best_path = path
+        # If we get here and best_path = [] it means we got a terminal node.
+        # Shouldn't be possible if state.is_terminal_node was correct
+        assert best_path != []
+        result = [state] + best_path
     else:
         raise Exception(
             "Non exhaustive enum (player should be HUMAN or ABSURDLE)"
         )
 
     # print(f"best result cs={_call_stack}", len(result))
+    assert result != [], "Implies no next states"
     return result
 
 
@@ -366,6 +403,13 @@ def _get_human_input() -> Word:
         return inp.lower()
 
 
+def _str_to_hint(s: str) -> Hint:
+    return [HintItem.from_char(ch.lower()) for ch in s]
+
+def _hint_to_str(hint: Hint) -> str:
+    return ''.join(h.char for h in hint)
+
+
 def _get_absurdle_input() -> Hint:
     while True:
         inp = input(">>> ENTER HINT :: ").strip()
@@ -373,7 +417,7 @@ def _get_absurdle_input() -> Hint:
             print("Invalid hint")
             continue
         try:
-            return [HintItem.from_char(ch.lower()) for ch in inp]
+            return _str_to_hint(inp)
         except InvalidHintItem:
             print("Invalid hint")
             continue
@@ -432,10 +476,7 @@ if __name__ == "__main__":
     """
     interact(
         Player.HUMAN,
-        ["later"],
-        [
-            list(map(HintItem.from_char, hint_str))
-            for hint_str in ["bbbyg"]
-        ],
+        ["today", "resin"],
+        list(map(_str_to_hint, ["bbbbb", "yybbb"])),
     )
     # test2()
